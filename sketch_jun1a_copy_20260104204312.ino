@@ -89,7 +89,7 @@ void setup() {
 
   // -------- OPENLOG --------
 
-  OpenLog_7.begin(4800);
+  OpenLog_7.begin(9600);
 
   // -------- BMP280 --------
 
