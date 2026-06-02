@@ -1,83 +1,48 @@
-// ============================================================
-// STATION ENVIRONNEMENTALE COMPLETE
-// Arduino UNO + BMP280 + SGP30 + LCD I2C + OpenLog
-//
-// Fonctions :
-// - Lecture temperature / pression / altitude
-// - Lecture CO2 / TVOC
-// - Affichage LCD I2C
-// - Creation automatique d'un fichier texte UTF-8
-// - Sauvegarde des mesures sur carte SD
-//
-// Encodage : UTF-8
-// ============================================================
-
-
-// ============================================================
-// LIBRAIRIES
-// ============================================================
-
 #include <Wire.h>
 #include <SoftwareSerial.h>
 
-#include <LiquidCrystal_I2C.h>
-
-#include <Adafruit_BMP280.h>
+#include <rgb_lcd.h>
+#include <Adafruit_BMP280_I2C.h>
 #include <Adafruit_SGP30.h>
 
-
-// ============================================================
+// =======================
 // CONFIGURATION
-// ============================================================
+// =======================
 
-// LCD I2C
-#define LCD_ADDR 0x27
-
-// BMP280
 #define BMP280_I2C_ADDR 0x76
 
-// OPENLOG
 #define PIN_OPENLOG_RXI_6 6
 #define PIN_OPENLOG_TXO_7 7
 
-
-// ============================================================
+// =======================
 // OBJETS
-// ============================================================
+// =======================
 
-LiquidCrystal_I2C lcd(LCD_ADDR, 16, 2);
+rgb_lcd lcdRgb;
 
-Adafruit_BMP280 bmp;
+Adafruit_BMP280 bmp280;
+Adafruit_SGP30 sgp30;
 
-Adafruit_SGP30 sgp;
+SoftwareSerial OpenLog_7(PIN_OPENLOG_TXO_7, PIN_OPENLOG_RXI_6);
 
-SoftwareSerial OpenLog(
-  PIN_OPENLOG_TXO_7,
-  PIN_OPENLOG_RXI_6
-);
-
-
-// ============================================================
+// =======================
 // VARIABLES
-// ============================================================
+// =======================
 
-float altitudeReference = 0;
+float h0;
 
-float temperature = 0;
-float pression = 0;
-float altitude = 0;
+float temp;
+float pression;
+float alt;
 
-uint16_t co2 = 0;
-uint16_t tvoc = 0;
+uint16_t tauxCO2;
+uint16_t tauxTVOC;
 
-String nomFichier = "MESURES.TXT";
+// =======================
+// FONCTIONS
+// =======================
 
-
-// ============================================================
-// SERIAL
-// ============================================================
-
-void serialSetup(long baudrate) {
+void serial_setupConnection(long baudrate) {
 
   Serial.begin(baudrate);
 
@@ -85,280 +50,200 @@ void serialSetup(long baudrate) {
     delay(100);
   }
 
-  Serial.println("Serial OK");
+  Serial.println("Port serie active");
 }
 
+bool sgp30_measure() {
 
-// ============================================================
-// MESURE SGP30
-// ============================================================
+  if (!sgp30.IAQmeasure()) {
 
-bool mesureSGP30() {
-
-  if (!sgp.IAQmeasure()) {
-
-    Serial.println("Erreur SGP30");
+    Serial.println("Erreur mesure SGP30");
     return false;
   }
 
-  co2 = sgp.eCO2;
-  tvoc = sgp.TVOC;
+  tauxCO2 = sgp30.eCO2;
+  tauxTVOC = sgp30.TVOC;
 
   return true;
 }
 
-
-// ============================================================
-// CREATION FICHIER UTF-8
-// ============================================================
-
-void creationFichier() {
-
-  // --------------------------------------------------------
-  // IMPORTANT :
-  //
-  // OpenLog enregistre automatiquement
-  // en UTF-8 si le texte envoye est UTF-8.
-  //
-  // On force un BOM UTF-8 :
-  // EF BB BF
-  //
-  // Cela permet a Windows / Notepad
-  // de reconnaitre le fichier en UTF-8
-  // et NON en ISO-8859-15.
-  // --------------------------------------------------------
-
-  OpenLog.write(0xEF);
-  OpenLog.write(0xBB);
-  OpenLog.write(0xBF);
-
-  OpenLog.println("====================================");
-  OpenLog.println("STATION ENVIRONNEMENTALE");
-  OpenLog.println("Encodage UTF-8");
-  OpenLog.println("====================================");
-
-  OpenLog.println(
-    "Temperature;Pression;Altitude;CO2;TVOC"
-  );
-
-  OpenLog.println("");
-}
-
-
-// ============================================================
+// =======================
 // SETUP
-// ============================================================
+// =======================
 
 void setup() {
 
-  // --------------------------------------------------------
-  // SERIAL
-  // --------------------------------------------------------
+  // -------- SERIAL --------
 
-  serialSetup(9600);
+  serial_setupConnection(9600);
 
-  // --------------------------------------------------------
-  // LCD
-  // --------------------------------------------------------
+  // -------- LCD --------
 
-  lcd.init();
+  lcdRgb.begin(16, 2);
 
-  lcd.backlight();
+  // Couleur verte
+  lcdRgb.setRGB(0, 255, 0);
 
-  lcd.clear();
+  lcdRgb.clear();
+  lcdRgb.print("Initialisation");
 
-  lcd.setCursor(0, 0);
-  lcd.print("Initialisation");
+  // -------- OPENLOG --------
 
-  // --------------------------------------------------------
-  // OPENLOG
-  // --------------------------------------------------------
+  OpenLog_7.begin(4800);
 
-  OpenLog.begin(9600);
+  // -------- BMP280 --------
 
-  delay(2000);
+  while (!bmp280.begin(BMP280_I2C_ADDR)) {
 
-  // --------------------------------------------------------
-  // CREATION FICHIER UTF-8
-  // --------------------------------------------------------
+    Serial.println("En attente BMP280...");
+    
+    lcdRgb.clear();
+    lcdRgb.print("BMP280 absent");
 
-  creationFichier();
-
-  // --------------------------------------------------------
-  // BMP280
-  // --------------------------------------------------------
-
-  if (!bmp.begin(BMP280_I2C_ADDR)) {
-
-    Serial.println("BMP280 absent");
-
-    lcd.clear();
-    lcd.print("BMP280 absent");
-
-    while (1);
+    delay(1000);
   }
 
-  Serial.println("BMP280 OK");
+  Serial.println("BMP280 detecte");
 
-  // --------------------------------------------------------
-  // SGP30
-  // --------------------------------------------------------
+  // -------- SGP30 --------
 
-  if (!sgp.begin()) {
+  while (!sgp30.begin()) {
 
-    Serial.println("SGP30 absent");
+    Serial.println("En attente SGP30...");
 
-    lcd.clear();
-    lcd.print("SGP30 absent");
+    lcdRgb.clear();
+    lcdRgb.print("SGP30 absent");
 
-    while (1);
+    delay(1000);
   }
 
-  Serial.println("SGP30 OK");
+  Serial.println("SGP30 detecte");
 
-  // --------------------------------------------------------
-  // ALTITUDE REFERENCE
-  // --------------------------------------------------------
+  // -------- ALTITUDE DE REFERENCE --------
 
-  delay(1000);
+  delay(500);
 
-  altitudeReference =
-    bmp.readAltitude(1013.25);
+  h0 = bmp280.readAltitude(1013.25);
 
-  // --------------------------------------------------------
-  // LCD READY
-  // --------------------------------------------------------
+  // -------- VALEURS INIT --------
 
-  lcd.clear();
+  temp = 0;
+  pression = 0;
+  alt = 0;
 
-  lcd.setCursor(0, 0);
-  lcd.print("Systeme Pret");
+  tauxCO2 = 0;
+  tauxTVOC = 0;
+
+  // -------- ENTETE CSV --------
+
+  OpenLog_7.println("Temperature;Pression;Altitude;CO2;TVOC");
+
+  lcdRgb.clear();
+  lcdRgb.print("Systeme Pret");
 
   delay(2000);
 }
 
-
-// ============================================================
+// =======================
 // LOOP
-// ============================================================
+// =======================
 
 void loop() {
 
-  // =========================================================
-  // MESURES
-  // =========================================================
+  // -------- MESURES BMP280 --------
 
-  temperature =
-    bmp.readTemperature();
+  temp = bmp280.readTemperature();
 
-  pression =
-    bmp.readPressure() / 100.0;
+  pression = bmp280.readPressure() / 100.0; // hPa
 
-  altitude =
-    bmp.readAltitude(1013.25)
-    - altitudeReference;
+  alt = bmp280.readAltitude(1013.25) - h0;
 
-  mesureSGP30();
+  // -------- MESURES SGP30 --------
 
-  // =========================================================
-  // PAGE LCD 1
-  // =========================================================
+  sgp30_measure();
 
-  lcd.clear();
+  // =======================
+  // AFFICHAGE LCD PAGE 1
+  // =======================
 
-  lcd.setCursor(0, 0);
-  lcd.print("Temp:");
-  lcd.print(temperature, 1);
-  lcd.print("C");
+  lcdRgb.clear();
 
-  lcd.setCursor(0, 1);
-  lcd.print("CO2:");
-  lcd.print(co2);
-  lcd.print("ppm");
+  lcdRgb.setCursor(0, 0);
+  lcdRgb.print("T:");
+  lcdRgb.print(temp, 1);
+  lcdRgb.print((char)223);
+  lcdRgb.print("C");
 
-  delay(3000);
+  lcdRgb.setCursor(9, 0);
+  lcdRgb.print("CO2:");
+  lcdRgb.print(tauxCO2);
 
-  // =========================================================
-  // PAGE LCD 2
-  // =========================================================
-
-  lcd.clear();
-
-  lcd.setCursor(0, 0);
-  lcd.print("Press:");
-  lcd.print(pression, 0);
-  lcd.print("hPa");
-
-  lcd.setCursor(0, 1);
-  lcd.print("Alt:");
-  lcd.print(altitude, 1);
-  lcd.print("m");
+  lcdRgb.setCursor(0, 1);
+  lcdRgb.print("P:");
+  lcdRgb.print(pression, 0);
+  lcdRgb.print("hPa");
 
   delay(3000);
 
-  // =========================================================
-  // PAGE LCD 3
-  // =========================================================
+  // =======================
+  // AFFICHAGE LCD PAGE 2
+  // =======================
 
-  lcd.clear();
+  lcdRgb.clear();
 
-  lcd.setCursor(0, 0);
-  lcd.print("TVOC:");
-  lcd.print(tvoc);
+  lcdRgb.setCursor(0, 0);
+  lcdRgb.print("Alt:");
+  lcdRgb.print(alt, 1);
+  lcdRgb.print("m");
 
-  lcd.setCursor(0, 1);
-  lcd.print("Sauvegarde");
+  lcdRgb.setCursor(0, 1);
+  lcdRgb.print("TVOC:");
+  lcdRgb.print(tauxTVOC);
+  lcdRgb.print("ppb");
 
-  // =========================================================
-  // CREATION TEXTE UTF-8
-  // =========================================================
+  delay(3000);
 
-  String ligne = "";
+  // =======================
+  // ENREGISTREMENT SD
+  // =======================
 
-  ligne +=
-    "Temperature="
-    + String(temperature, 1)
-    + "°C ; ";
+  OpenLog_7.print(temp);
+  OpenLog_7.print(";");
 
-  ligne +=
-    "Pression="
-    + String(pression, 0)
-    + "hPa ; ";
+  OpenLog_7.print(pression);
+  OpenLog_7.print(";");
 
-  ligne +=
-    "Altitude="
-    + String(altitude, 1)
-    + "m ; ";
+  OpenLog_7.print(alt);
+  OpenLog_7.print(";");
 
-  ligne +=
-    "CO2="
-    + String(co2)
-    + "ppm ; ";
+  OpenLog_7.print(tauxCO2);
+  OpenLog_7.print(";");
 
-  ligne +=
-    "TVOC="
-    + String(tvoc)
-    + "ppb";
+  OpenLog_7.println(tauxTVOC);
 
-  // =========================================================
-  // SAUVEGARDE SD UTF-8
-  // =========================================================
-
-  OpenLog.println(ligne);
-
-  // =========================================================
+  // =======================
   // MONITEUR SERIE
-  // =========================================================
+  // =======================
 
-  Serial.println(ligne);
+  Serial.print("Temperature : ");
+  Serial.print(temp);
+  Serial.println(" C");
 
-  Serial.println("--------------------------------");
+  Serial.print("Pression : ");
+  Serial.print(pression);
+  Serial.println(" hPa");
 
-  // =========================================================
-  // ATTENTE
-  // =========================================================
+  Serial.print("Altitude : ");
+  Serial.print(alt);
+  Serial.println(" m");
 
-  delay(2000);
+  Serial.print("CO2 : ");
+  Serial.print(tauxCO2);
+  Serial.println(" ppm");
 
-  // Le programme recommence automatiquement
+  Serial.print("TVOC : ");
+  Serial.print(tauxTVOC);
+  Serial.println(" ppb");
+
+  Serial.println("----------------------");
 }
